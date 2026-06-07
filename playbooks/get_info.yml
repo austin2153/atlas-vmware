@@ -1,0 +1,23 @@
+---
+- name: Gather vCenter info
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - ../vars/credentials.yml
+    - ../config/vcenters.yml
+
+  tasks:
+    - name: Get datacenter info
+      community.vmware.vmware_datacenter_info:
+        hostname: "{{ item.hostname }}"
+        username: "{{ vault_credentials.vcenter[item.credential].username }}"
+        password: "{{ vault_credentials.vcenter[item.credential].password }}"
+        validate_certs: "{{ vault_credentials.vcenter[item.credential].validate_certs }}"
+      loop: "{{ vcenters }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: datacenter_info
+
+    - name: Print datacenter info
+      ansible.builtin.debug:
+        var: datacenter_info

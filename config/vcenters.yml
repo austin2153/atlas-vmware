@@ -1,0 +1,14 @@
+---
+vcenters:
+  - name: vcenter-01
+    hostname: vcenter-01.atlas.local
+    credential: vcsim
+  - name: vcenter-02
+    hostname: vcenter-02.atlas.local
+    credential: vcsim
+  - name: vcenter-03
+    hostname: vcenter-03.atlas.local
+    credential: vcsim
+  - name: vcenter-04
+    hostname: vcenter-04.atlas.local
+    credential: vcsim
