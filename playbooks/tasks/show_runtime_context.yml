@@ -1,3 +1,4 @@
+---
 # Prints a compact Ansible runtime summary at the start of a play.
 
 - name: Show runtime context

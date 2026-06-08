@@ -1,3 +1,4 @@
+---
 # Selects the usable vCenter pool for placement discovery.
 #
 # Expects:
@@ -32,16 +33,17 @@
   no_log: true
 
 - name: Discover vSphere datacenters across configured vCenters
-  vmware.vmware_rest.vcenter_datacenter_info:
-    vcenter_hostname: "{{ item.hostname }}"
-    vcenter_username: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username }}"
-    vcenter_password: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password }}"
-    vcenter_validate_certs: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].validate_certs | default(false) | bool }}"
+  community.vmware.vmware_datacenter_info:
+    hostname: "{{ item.hostname }}"
+    username: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username }}"
+    password: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password }}"
+    validate_certs: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].validate_certs | default(false) | bool }}"
   loop: "{{ resolved_config.datacenter.vcenters }}"
   loop_control:
     label: "{{ item.hostname }}"
   register: vcenter_datacenter_results
   failed_when: false
+  no_log: true
 
 - name: Build vSphere datacenter discovery summary
   ansible.builtin.set_fact:
@@ -51,9 +53,9 @@
         + [
             {
               'hostname': item.item.hostname,
-              'ok': not (item.failed | default(false)) and (item.value | default([]) | length > 0),
-              'datacenter_count': item.value | default([]) | length,
-              'datacenters': item.value | default([]),
+              'ok': not (item.failed | default(false)) and (item.datacenter_info | default([]) | length > 0),
+              'datacenter_count': item.datacenter_info | default([]) | length,
+              'datacenters': item.datacenter_info | default([]) | map(attribute='name') | list,
               'error': item.msg | default('')
             }
           ]

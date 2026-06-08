@@ -1,5 +1,6 @@
 {
   "yaml.customTags": [
     "!vault scalar"
-  ]
+  ],
+  "yaml.format.printWidth": 999
 }

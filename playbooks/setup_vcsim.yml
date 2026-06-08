@@ -1,0 +1,53 @@
+---
+# Creates test fixtures in vcsim instances for local development and testing.
+# Run this once after vcsim instances are (re)deployed.
+#
+# What this creates:
+# - A "Templates" folder in each datacenter
+# - rhel9-template, ubuntu22-template, win2022-template in each vcsim
+#
+# Usage:
+#   ansible-playbook playbooks/setup_vcsim.yml --vault-password-file ~/.vault_password
+#
+# Note: vmware_guest does not work with vcsim for creating VMs or templates.
+# Template creation uses a pyVmomi script (scripts/vcsim_create_templates.py) instead.
+
+- name: Setup vcsim test fixtures
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../vars/credentials.yml"
+
+  vars:
+    vcsim_instances:
+      - hostname: vcenter-01.atlas.local
+        credential: vcsim
+      - hostname: vcenter-02.atlas.local
+        credential: vcsim
+      - hostname: vcenter-03.atlas.local
+        credential: vcsim
+      - hostname: vcenter-04.atlas.local
+        credential: vcsim
+
+  tasks:
+    - name: Create templates in each vcsim instance via pyVmomi
+      ansible.builtin.script:
+        executable: "{{ ansible_playbook_python }}"
+        cmd: >-
+          {{ playbook_dir }}/../scripts/vcsim_create_templates.py
+          {{ item.hostname }}
+          {{ vault_credentials.vcenter[item.credential].username }}
+          {{ vault_credentials.vcenter[item.credential].password }}
+      loop: "{{ vcsim_instances }}"
+      loop_control:
+        label: "{{ item.hostname }}"
+      register: _create_results
+      no_log: true
+
+    - name: Show template creation results
+      ansible.builtin.debug:
+        msg: "{{ item.stdout | from_json }}"
+      loop: "{{ _create_results.results }}"
+      loop_control:
+        label: "{{ (item.stdout | from_json).hostname }}"

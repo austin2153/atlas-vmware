@@ -19,3 +19,15 @@
 
     - name: Select VM placement vCenter
       ansible.builtin.import_tasks: tasks/vm-placement/select_vcenter.yml
+
+    - name: Select VM placement cluster
+      ansible.builtin.import_tasks: tasks/vm-placement/select_cluster.yml
+
+    - name: Select VM placement datastore
+      ansible.builtin.import_tasks: tasks/vm-placement/select_datastore.yml
+
+    - name: Select VM placement network
+      ansible.builtin.import_tasks: tasks/vm-placement/select_network.yml
+
+    - name: Select VM template
+      ansible.builtin.import_tasks: tasks/vm-placement/select_template.yml

@@ -1,0 +1,97 @@
+---
+# Selects a compute cluster for VM placement.
+#
+# Expects:
+# - resolved_config (from load_request_config)
+# - vault_credentials (from vars/credentials.yml)
+# - vcenter_datacenter_summary (from select_vcenter)
+#
+# Profile thresholds from resolved profile config:
+# - cluster_cpu_cutoff: max CPU utilization ratio (0.0-1.0) — clusters above this are excluded
+# - cluster_mem_cutoff: min free memory in GB — clusters below this are excluded
+#
+# Produces:
+# - selected_cluster: dict with name, hostname, datacenter, cpu/mem stats
+
+- name: Resolve placement credential
+  ansible.builtin.set_fact:
+    _vcenter_cred: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential] }}"
+  no_log: true
+
+- name: Resolve active vCenter hostname for cluster discovery
+  ansible.builtin.set_fact:
+    _active_vcenter_hostname: >-
+      {{
+        (vcenter_datacenter_summary | selectattr('ok') | list | first).hostname
+      }}
+
+- name: Resolve target datacenter name
+  ansible.builtin.set_fact:
+    _target_datacenter: >-
+      {{
+        (vcenter_datacenter_summary | selectattr('ok') | list | first).datacenters | first
+      }}
+
+- name: Gather cluster resource facts via pyVmomi
+  ansible.builtin.script:
+    executable: "{{ ansible_playbook_python }}"
+    cmd: >-
+      {{ playbook_dir }}/../scripts/vcenter_cluster_facts.py
+      {{ _active_vcenter_hostname }}
+      {{ _vcenter_cred.username }}
+      {{ _vcenter_cred.password }}
+      {{ _target_datacenter }}
+  register: _cluster_facts_raw
+  no_log: true
+
+- name: Parse cluster facts
+  ansible.builtin.set_fact:
+    _cluster_facts: "{{ _cluster_facts_raw.stdout | from_json }}"
+
+- name: Validate cluster facts gathered successfully
+  ansible.builtin.assert:
+    that:
+      - _cluster_facts.error == ''
+      - _cluster_facts.clusters | length > 0
+    fail_msg: >-
+      Failed to gather cluster facts from {{ _active_vcenter_hostname }}/{{ _target_datacenter }}.
+      Error: {{ _cluster_facts.error }}
+
+- name: Filter eligible clusters by profile thresholds
+  ansible.builtin.set_fact:
+    _eligible_clusters: >-
+      {{
+        _cluster_facts.clusters
+        | selectattr('cpu_utilization_ratio', 'lt', profile_config.cluster_cpu_cutoff | default(1.0) | float)
+        | selectattr('free_mem_gb', 'gt', profile_config.cluster_mem_cutoff | default(0) | float)
+        | list
+      }}
+
+- name: Validate at least one eligible cluster found
+  ansible.builtin.assert:
+    that:
+      - _eligible_clusters | length > 0
+    fail_msg: >-
+      No clusters on {{ _active_vcenter_hostname }}/{{ _target_datacenter }} meet placement thresholds.
+      Available clusters: {{ _cluster_facts.clusters | map(attribute='name') | list }}
+
+- name: Select cluster with lowest CPU utilization
+  ansible.builtin.set_fact:
+    selected_cluster: >-
+      {{
+        (_eligible_clusters | sort(attribute='cpu_utilization_ratio') | first)
+        | combine({
+            'hostname': _active_vcenter_hostname,
+            'datacenter': _target_datacenter
+          })
+      }}
+
+- name: Show selected cluster
+  ansible.builtin.debug:
+    msg:
+      - "Selected cluster : {{ selected_cluster.name }}"
+      - "vCenter          : {{ selected_cluster.hostname }}"
+      - "Datacenter       : {{ selected_cluster.datacenter }}"
+      - "Hosts            : {{ selected_cluster.host_count }}"
+      - "CPU free         : {{ selected_cluster.free_cpu_ghz }} GHz (utilization: {{ (selected_cluster.cpu_utilization_ratio * 100) | round(1) }}%)"
+      - "Memory free      : {{ selected_cluster.free_mem_gb }} GB (utilization: {{ (selected_cluster.mem_utilization_ratio * 100) | round(1) }}%)"

@@ -1,0 +1,85 @@
+---
+# Selects a datastore for VM placement based on free space thresholds.
+#
+# Expects:
+# - resolved_config (from load_request_config)
+# - vault_credentials (from vars/credentials.yml)
+# - selected_cluster (from select_cluster)
+# - profile_config (from load_request_config)
+#
+# Profile thresholds:
+# - disk_cutoff: minimum free space in GB for a datastore to be eligible
+#
+# Produces:
+# - selected_datastore: dict with name, capacity_gb, free_gb, provisioned_gb
+
+- name: Gather datastore facts for datacenter
+  community.vmware.vmware_datastore_info:
+    hostname: "{{ selected_cluster.hostname }}"
+    username: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username }}"
+    password: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password }}"
+    validate_certs: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].validate_certs | default(false) | bool }}"
+    datacenter_name: "{{ selected_cluster.datacenter }}"
+  register: _datastore_facts
+  no_log: true
+
+- name: Validate datastore facts gathered successfully
+  ansible.builtin.assert:
+    that:
+      - _datastore_facts.datastores is defined
+      - _datastore_facts.datastores | length > 0
+    fail_msg: >-
+      No datastores found on {{ selected_cluster.hostname }}/{{ selected_cluster.datacenter }}.
+
+- name: Build datastore list with GB fields
+  ansible.builtin.set_fact:
+    _datastores_with_gb: >-
+      {{
+        _datastores_with_gb | default([])
+        + [{
+            'name': item.name,
+            'accessible': item.accessible,
+            'maintenance_mode': item.maintenanceMode,
+            'capacity_gb': (item.capacity / 1073741824) | round(2),
+            'free_gb': (item.freeSpace / 1073741824) | round(2),
+            'provisioned_gb': (item.provisioned / 1073741824) | round(2)
+          }]
+      }}
+  loop: "{{ _datastore_facts.datastores }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Filter eligible datastores by profile thresholds
+  ansible.builtin.set_fact:
+    _eligible_datastores: >-
+      {{
+        _datastores_with_gb
+        | selectattr('accessible', 'eq', true)
+        | selectattr('maintenance_mode', 'eq', 'normal')
+        | selectattr('free_gb', 'gt', profile_config.disk_cutoff | default(30) | float)
+        | list
+      }}
+
+- name: Validate at least one eligible datastore found
+  ansible.builtin.assert:
+    that:
+      - _eligible_datastores | length > 0
+    fail_msg: >-
+      No datastores on {{ selected_cluster.hostname }}/{{ selected_cluster.datacenter }} meet the free space
+      threshold of {{ profile_config.disk_cutoff | default(30) }} GB.
+      Available datastores: {{ _datastores_with_gb | map(attribute='name') | list }}
+
+- name: Select datastore with most free space
+  ansible.builtin.set_fact:
+    selected_datastore: >-
+      {{
+        _eligible_datastores | sort(attribute='free_gb') | last
+      }}
+
+- name: Show selected datastore
+  ansible.builtin.debug:
+    msg:
+      - "Selected datastore : {{ selected_datastore.name }}"
+      - "Capacity           : {{ selected_datastore.capacity_gb }} GB"
+      - "Free               : {{ selected_datastore.free_gb }} GB"
+      - "Provisioned        : {{ selected_datastore.provisioned_gb }} GB"

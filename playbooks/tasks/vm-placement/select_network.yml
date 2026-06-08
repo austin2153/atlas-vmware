@@ -1,0 +1,58 @@
+---
+# Selects the target network for VM placement from resolved_config networks.
+#
+# Expects:
+# - resolved_config (from load_request_config)
+# - fts_compartment (from request vars)
+#
+# Selection logic:
+# 1. Networks must have provisioning.state:enabled tag
+# 2. Networks must match the request compartment tag
+# 3. Among eligible, prefer MAIN function networks; first match wins
+#
+# Produces:
+# - selected_network: dict with network_name, cidr, network_function, tags
+
+- name: Validate resolved network list is populated
+  ansible.builtin.assert:
+    that:
+      - resolved_config.networks.entries is defined
+      - resolved_config.networks.entries | length > 0
+    fail_msg: >-
+      No networks defined in resolved config.
+      Check network_configs in datacenter config {{ resolved_config.datacenter.file }}.
+
+- name: Filter networks eligible for provisioning
+  ansible.builtin.set_fact:
+    _eligible_networks: >-
+      {{
+        resolved_config.networks.entries
+        | selectattr('tags', 'contains', 'provisioning.state:enabled')
+        | selectattr('tags', 'contains', fts_compartment)
+        | list
+      }}
+
+- name: Validate at least one eligible network found
+  ansible.builtin.assert:
+    that:
+      - _eligible_networks | length > 0
+    fail_msg: >-
+      No networks in datacenter {{ resolved_config.datacenter.datacenter_config_name }}
+      match compartment={{ fts_compartment }} with provisioning.state:enabled.
+      Available networks: {{ resolved_config.networks.entries | map(attribute='network_name') | list }}
+
+- name: Prefer MAIN function network, fall back to first eligible
+  ansible.builtin.set_fact:
+    selected_network: >-
+      {{
+        (_eligible_networks | selectattr('network_function', 'eq', 'MAIN') | list
+         + _eligible_networks) | first
+      }}
+
+- name: Show selected network
+  ansible.builtin.debug:
+    msg:
+      - "Selected network  : {{ selected_network.network_name }}"
+      - "CIDR              : {{ selected_network.cidr }}"
+      - "Function          : {{ selected_network.network_function }}"
+      - "Tags              : {{ selected_network.tags | join(', ') }}"
