@@ -43,6 +43,7 @@ ansible-playbook playbooks/<playbook>.yml --vault-password-file ~/.vault_passwor
 | Playbook | What it does |
 |---|---|
 | `provision_vm.yml` | Full end-to-end VM provisioning — config load, placement, VM clone |
+| `vm_day2.yml` | Day 2 operations on an existing VM (power, snapshot, delete) |
 | `validate_config_loading.yml` | Validates request vars resolve to the correct datacenter/profile/network config |
 | `validate_vm_placement.yml` | Runs the placement pipeline without provisioning — useful for dry runs |
 | `setup_vcsim.yml` | Seeds vcsim test fixtures (run once after redeploy) |
@@ -74,8 +75,14 @@ Each placement step produces a `selected_*` fact consumed by subsequent steps.
 | `fts_os_type` | OS type key from profile | `rhel9` |
 | `fts_cpu` | vCPU count | `2` |
 | `fts_mem` | Memory in GB | `4` |
+| `fts_purpose` | Free-text description of the VM's purpose | `AWX test run` |
+| `fts_useremail` | Requestor email address | `user@example.com` |
 
 For local testing these come from `playbooks/vars/sample_vm_request.yml`. In AWX they are passed as extra vars via a job template survey.
+
+### VM naming
+
+VMs are named `{site_code}-{os_type}-{timestamp}` at provision time, e.g. `atlas01-rhel9-20260608024058`. The site code comes from the matched datacenter config. Names are unique by timestamp and used as the identifier for day 2 operations.
 
 ### vcsim compatibility
 
@@ -87,6 +94,9 @@ vcsim implements the vSphere SOAP API but not all features. A few `community.vmw
 | `vcenter_template_facts.py` | `select_template` | `vmware_vm_info` crashes on missing summary attribute |
 | `vcenter_vm_exists.py` | `check_vm_exists` | direct pyVmomi lookup by name |
 | `vcenter_create_vm.py` | `provision_vm.yml` | `vmware_guest` silently no-ops for VM creation on vcsim |
+| `vcenter_vm_power.py` | `vm_day2.yml` | power on/off/reset via `PowerOnVM_Task`, `PowerOffVM_Task`, `ResetVM_Task` |
+| `vcenter_vm_snapshot.py` | `vm_day2.yml` | create, list, and delete snapshots |
+| `vcenter_vm_delete.py` | `vm_day2.yml` | power off then destroy via `Destroy_Task` |
 | `vcsim_create_templates.py` | `setup_vcsim.yml` | `vmware_guest` silently no-ops for template creation |
 
 pyVmomi is VMware's official Python SDK for the vSphere SOAP API — the same underlying library that `community.vmware` modules use internally.
@@ -133,3 +143,14 @@ setup.sh             # First-time environment setup
 ## AWX
 
 Playbooks are run via AWX at `awx.atlas.local`. AWX pulls from this repo as a Project. The vault password is stored as a **Vault** credential in AWX and attached to each job template.
+
+| Job Template | Playbook | Survey inputs |
+|---|---|---|
+| Provision VM | `provision_vm.yml` | `fts_*` request variables |
+| VM Day 2 Operations | `vm_day2.yml` | `vm_name`, `vm_action`, `vcenter_hostname`, `datacenter` |
+
+The `vm_action` survey field accepts: `power_on`, `power_off`, `reset`, `snapshot`, `snapshots`, `delete_snapshots`, `delete`.
+
+### AWX inventory requirement
+
+The `localhost` host in the AWX inventory must have `ansible_connection: local` set. Without it, AWX attempts SSH for every task instead of running locally.
