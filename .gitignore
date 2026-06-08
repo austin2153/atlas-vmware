@@ -1,2 +1,3 @@
 # Local files
 .venv/
+*.tar.gz
