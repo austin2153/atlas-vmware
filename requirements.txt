@@ -3,3 +3,4 @@ ansible-lint
 certifi
 requests
 pyVmomi
+aiohttp
