@@ -1,0 +1,99 @@
+---
+# Provisions a VM from a request against vcsim.
+# Runs the full placement pipeline then clones the selected template.
+#
+# Usage:
+#   ansible-playbook playbooks/provision_vm.yml --vault-password-file ~/.vault_password
+#
+# Request inputs come from vars/sample_vm_request.yml for local testing.
+# In AWX, these are passed as extra vars at job launch time.
+
+- name: Provision VM
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - vars/sample_vm_request.yml
+    - "{{ playbook_dir }}/../vars/credentials.yml"
+
+  tasks:
+    - name: Show runtime context
+      ansible.builtin.import_tasks: tasks/show_runtime_context.yml
+
+    - name: Load request-driven config
+      ansible.builtin.import_tasks: tasks/load_request_config.yml
+
+    - name: Select VM placement vCenter
+      ansible.builtin.import_tasks: tasks/vm-placement/select_vcenter.yml
+
+    - name: Select VM placement cluster
+      ansible.builtin.import_tasks: tasks/vm-placement/select_cluster.yml
+
+    - name: Select VM placement datastore
+      ansible.builtin.import_tasks: tasks/vm-placement/select_datastore.yml
+
+    - name: Select VM placement network
+      ansible.builtin.import_tasks: tasks/vm-placement/select_network.yml
+
+    - name: Select VM template
+      ansible.builtin.import_tasks: tasks/vm-placement/select_template.yml
+
+    - name: Build VM name
+      ansible.builtin.set_fact:
+        vm_name: "{{ resolved_config.datacenter.site_code }}-{{ fts_os_type }}-{{ lookup('pipe', 'date +%Y%m%d%H%M%S') }}"
+
+    - name: Show placement summary
+      ansible.builtin.debug:
+        msg:
+          - "VM name      : {{ vm_name }}"
+          - "vCenter      : {{ selected_cluster.hostname }}"
+          - "Datacenter   : {{ selected_cluster.datacenter }}"
+          - "Cluster      : {{ selected_cluster.name }}"
+          - "Datastore    : {{ selected_datastore.name }}"
+          - "Network      : {{ selected_network.network_name }}"
+          - "Template     : {{ selected_template.name }}"
+          - "CPU          : {{ fts_cpu }}"
+          - "Memory       : {{ fts_mem }}GB"
+
+    - name: Create VM from template via pyVmomi
+      ansible.builtin.script:
+        executable: "{{ ansible_playbook_python }}"
+        cmd: >-
+          {{ playbook_dir }}/../scripts/vcenter_create_vm.py
+          {{ selected_cluster.hostname }}
+          {{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username }}
+          {{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password }}
+          {{ vm_create_spec | to_json | quote }}
+      vars:
+        vm_create_spec:
+          vm_name: "{{ vm_name }}"
+          datacenter: "{{ selected_cluster.datacenter }}"
+          cluster: "{{ selected_cluster.name }}"
+          datastore: "{{ selected_datastore.name }}"
+          template_moid: "{{ selected_template.moid }}"
+          folder: "vm"
+          cpu: "{{ fts_cpu }}"
+          memory_mb: "{{ (fts_mem | int) * 1024 }}"
+      register: _create_result_raw
+      no_log: true
+
+    - name: Parse VM creation result
+      ansible.builtin.set_fact:
+        vm_result: "{{ _create_result_raw.stdout | from_json }}"
+
+    - name: Validate VM was created successfully
+      ansible.builtin.assert:
+        that:
+          - vm_result.error == ''
+        fail_msg: "VM creation failed: {{ vm_result.error }}"
+
+    - name: Show provisioned VM
+      ansible.builtin.debug:
+        msg:
+          - "VM provisioned successfully"
+          - "Name     : {{ vm_result.vm.name }}"
+          - "MOID     : {{ vm_result.vm.moid }}"
+          - "CPU      : {{ vm_result.vm.cpu }}"
+          - "Memory   : {{ vm_result.vm.memory_mb }}MB"
+          - "Cluster  : {{ vm_result.vm.cluster }}"
+          - "Datastore: {{ vm_result.vm.datastore }}"
