@@ -1,0 +1,92 @@
+# Selects the usable vCenter pool for placement discovery.
+#
+# Expects:
+# - resolved_config.datacenter.vcenter_credential and vcenters
+# - vault_credentials.vcenter entry for the credential key
+#
+# Produces:
+# - vcenter_datacenter_summary
+# - skipped_vcenters
+
+- name: Validate datacenter config defines vCenter placement inputs
+  ansible.builtin.assert:
+    that:
+      - resolved_config.datacenter.vcenter_credential is defined
+      - resolved_config.datacenter.vcenter_credential | length > 0
+      - resolved_config.datacenter.vcenters is defined
+      - resolved_config.datacenter.vcenters | length > 0
+    fail_msg: >-
+      Datacenter config {{ resolved_config.datacenter.file }} must define
+      vcenter_credential and at least one vCenter hostname.
+
+- name: Validate vCenter credential exists in vault
+  ansible.builtin.assert:
+    that:
+      - vault_credentials.vcenter is defined
+      - resolved_config.datacenter.vcenter_credential in vault_credentials.vcenter
+      - vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username | default('', true) | length > 0
+      - vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password | default('', true) | length > 0
+    fail_msg: >-
+      vCenter credential {{ resolved_config.datacenter.vcenter_credential }}
+      must exist under vault_credentials.vcenter with username and password.
+  no_log: true
+
+- name: Discover vSphere datacenters across configured vCenters
+  vmware.vmware_rest.vcenter_datacenter_info:
+    vcenter_hostname: "{{ item.hostname }}"
+    vcenter_username: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username }}"
+    vcenter_password: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password }}"
+    vcenter_validate_certs: "{{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].validate_certs | default(false) | bool }}"
+  loop: "{{ resolved_config.datacenter.vcenters }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  register: vcenter_datacenter_results
+  failed_when: false
+
+- name: Build vSphere datacenter discovery summary
+  ansible.builtin.set_fact:
+    vcenter_datacenter_summary: >-
+      {{
+        vcenter_datacenter_summary | default([])
+        + [
+            {
+              'hostname': item.item.hostname,
+              'ok': not (item.failed | default(false)) and (item.value | default([]) | length > 0),
+              'datacenter_count': item.value | default([]) | length,
+              'datacenters': item.value | default([]),
+              'error': item.msg | default('')
+            }
+          ]
+      }}
+  loop: "{{ vcenter_datacenter_results.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.hostname }}"
+
+- name: Show vSphere datacenter discovery summary
+  ansible.builtin.debug:
+    msg: "{{ vcenter_datacenter_summary | default([]) }}"
+
+- name: Build skipped vCenter list
+  ansible.builtin.set_fact:
+    skipped_vcenters: >-
+      {{
+        vcenter_datacenter_summary | default([])
+        | rejectattr('ok')
+        | map(attribute='hostname')
+        | list
+      }}
+
+- name: WARNING - skipped vCenters detected
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: One or more configured vCenters were skipped."
+      - "Skipped: {{ skipped_vcenters }}"
+  when: skipped_vcenters | length > 0
+
+- name: Validate at least one vSphere datacenter was discovered
+  ansible.builtin.assert:
+    that:
+      - vcenter_datacenter_summary | default([]) | sum(attribute='datacenter_count') > 0
+    fail_msg: >-
+      Unable to discover any vSphere datacenters from the configured vCenters.
+      Discovery summary: {{ vcenter_datacenter_summary | default([]) }}

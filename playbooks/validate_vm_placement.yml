@@ -1,0 +1,21 @@
+---
+# Validates VMware placement for a VM request against vcsim.
+# Performs vCenter discovery and validates placement inputs resolve correctly.
+
+- name: Validate VM placement
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - vars/sample_vm_request.yml
+    - "{{ playbook_dir }}/../vars/credentials.yml"
+
+  tasks:
+    - name: Show runtime context
+      ansible.builtin.import_tasks: tasks/show_runtime_context.yml
+
+    - name: Load request-driven config
+      ansible.builtin.import_tasks: tasks/load_request_config.yml
+
+    - name: Select VM placement vCenter
+      ansible.builtin.import_tasks: tasks/vm-placement/select_vcenter.yml

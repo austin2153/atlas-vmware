@@ -1,0 +1,17 @@
+---
+datacenter_config_name: Atlas Lab 04
+site_code: atlas04
+tag_location: location:atlas.vcenter-04
+tag_environments:
+- environment:atlas.dev
+- environment:atlas.test
+- environment:atlas.lab
+tag_compartments:
+- compartment:atlas.general
+- compartment:atlas.lab
+network_configs:
+- vcenter_04
+
+vcenter_credential: vcsim
+vcenters:
+- hostname: vcenter-04.atlas.local

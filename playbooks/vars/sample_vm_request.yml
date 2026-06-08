@@ -1,0 +1,13 @@
+---
+# Sample VM request used by local validation playbooks.
+# Real AWX job templates pass these values at launch time as extra vars.
+
+fts_config_profile: homelab
+fts_location: "location:atlas.vcenter-01"
+fts_environment: "environment:atlas.dev"
+fts_compartment: "compartment:atlas.general"
+fts_os_type: rhel9
+fts_cpu: 2
+fts_mem: 4
+fts_purpose: "lab testing"
+fts_useremail: "austincamp@gmail.com"

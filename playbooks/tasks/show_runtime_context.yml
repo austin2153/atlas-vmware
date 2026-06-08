@@ -1,0 +1,8 @@
+# Prints a compact Ansible runtime summary at the start of a play.
+
+- name: Show runtime context
+  ansible.builtin.debug:
+    msg:
+      - "ansible version : {{ ansible_version.full }}"
+      - "python path     : {{ ansible_playbook_python }}"
+      - "AWX job id      : {{ lookup('ansible.builtin.env', 'AWX_ISOLATED_DATA_DIR') | default('local run', true) }}"

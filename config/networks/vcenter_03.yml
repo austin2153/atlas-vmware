@@ -1,0 +1,10 @@
+---
+networks:
+- network_name: DC0_H0_VM_Network
+  cidr: 192.168.20.0/24
+  network_function: MAIN
+  tags:
+  - network.function:main
+  - provisioning.state:enabled
+  - compartment:atlas.general
+  - compartment:atlas.lab

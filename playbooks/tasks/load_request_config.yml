@@ -1,0 +1,221 @@
+# Loads request-driven Git-backed configuration for placement validation.
+#
+# Expects:
+# - fts_config_profile, fts_location, fts_environment, fts_compartment
+# - fts_os_type, fts_cpu, fts_mem
+#
+# Produces:
+# - matched_datacenter_config
+# - profile_config
+# - resolved_template_config
+# - networks
+# - resolved_config
+
+# ==============================================================================
+# Request validation
+# ==============================================================================
+
+- name: Resolve config root path
+  ansible.builtin.set_fact:
+    config_root_path: "{{ fts_config_root | default(playbook_dir ~ '/../config') }}"
+
+- name: Validate required request inputs
+  ansible.builtin.assert:
+    that:
+      - fts_config_profile is defined
+      - fts_location is defined
+      - fts_environment is defined
+      - fts_compartment is defined
+      - fts_os_type is defined
+      - fts_cpu is defined
+      - fts_mem is defined
+      - fts_cpu | int > 0
+      - fts_mem | int > 0
+    fail_msg: >-
+      Required request value missing. Check fts_config_profile={{ fts_config_profile | default('not provided') }},
+      fts_location={{ fts_location | default('not provided') }},
+      fts_environment={{ fts_environment | default('not provided') }},
+      fts_compartment={{ fts_compartment | default('not provided') }},
+      fts_os_type={{ fts_os_type | default('not provided') }},
+      fts_cpu={{ fts_cpu | default('not provided') }},
+      fts_mem={{ fts_mem | default('not provided') }}.
+
+# ==============================================================================
+# Profile config
+# ==============================================================================
+
+- name: Validate config profile name is file-safe
+  ansible.builtin.assert:
+    that:
+      - fts_config_profile is match('^[A-Za-z0-9_]+$')
+    fail_msg: >-
+      fts_config_profile must contain only letters, numbers, and underscores.
+      Got fts_config_profile={{ fts_config_profile }}.
+
+- name: Load requested config profile
+  ansible.builtin.include_vars:
+    file: "{{ config_root_path }}/profiles/{{ fts_config_profile }}.yml"
+    name: profile_config
+
+# ==============================================================================
+# OS template selection
+# ==============================================================================
+
+- name: Validate profile defines OS template catalog
+  ansible.builtin.assert:
+    that:
+      - profile_config.template_folder is defined
+      - profile_config.os_templates is defined
+      - profile_config.os_templates is mapping
+      - profile_config.os_templates | length > 0
+    fail_msg: >-
+      Profile {{ fts_config_profile }} must define template_folder and os_templates.
+
+- name: Validate requested OS type is defined in profile
+  ansible.builtin.assert:
+    that:
+      - fts_os_type in profile_config.os_templates
+    fail_msg: >-
+      fts_os_type={{ fts_os_type }} is not defined in profile {{ fts_config_profile }}.
+      Defined OS types={{ profile_config.os_templates.keys() | list }}.
+
+- name: Resolve requested template config
+  ansible.builtin.set_fact:
+    resolved_template_config: >-
+      {{
+        profile_config.os_templates[fts_os_type]
+        | combine({
+            'template_key': fts_os_type,
+            'template_folder': profile_config.template_folder
+          })
+      }}
+
+# ==============================================================================
+# Datacenter config
+# ==============================================================================
+
+- name: Find datacenter config files
+  ansible.builtin.set_fact:
+    datacenter_config_files: "{{ query('ansible.builtin.fileglob', config_root_path ~ '/datacenter/*.yml') | sort }}"
+
+- name: Load datacenter config candidates
+  ansible.builtin.include_vars:
+    file: "{{ item }}"
+    name: candidate_datacenter_config
+  register: datacenter_config_candidate_results
+  loop: "{{ datacenter_config_files }}"
+  loop_control:
+    label: "{{ item | basename }}"
+
+- name: Initialize datacenter config match list
+  ansible.builtin.set_fact:
+    matching_datacenter_configs: []
+
+- name: Match datacenter config for request placement tags
+  ansible.builtin.set_fact:
+    matching_datacenter_configs: >-
+      {{
+        matching_datacenter_configs
+        + [
+            item.ansible_facts.candidate_datacenter_config
+            | combine({
+                'file': item.item | basename | regex_replace('\.yml$', ''),
+                'path': item.item
+              })
+          ]
+      }}
+  loop: "{{ datacenter_config_candidate_results.results }}"
+  loop_control:
+    label: "{{ item.item | basename }}"
+  when:
+    - item.ansible_facts.candidate_datacenter_config.tag_location == fts_location
+    - fts_environment in item.ansible_facts.candidate_datacenter_config.tag_environments
+    - fts_compartment in item.ansible_facts.candidate_datacenter_config.tag_compartments
+
+- name: Validate exactly one datacenter config matched
+  ansible.builtin.assert:
+    that:
+      - matching_datacenter_configs | length == 1
+    fail_msg: >-
+      Expected exactly one datacenter config for fts_location={{ fts_location }},
+      fts_environment={{ fts_environment }}, fts_compartment={{ fts_compartment }}.
+      Matched {{ matching_datacenter_configs | map(attribute='file') | list }}.
+
+- name: Resolve matched datacenter config
+  ansible.builtin.set_fact:
+    datacenter_config_file: "{{ matching_datacenter_configs[0].file }}"
+    matched_datacenter_config: "{{ matching_datacenter_configs[0] }}"
+
+# ==============================================================================
+# Network config
+# ==============================================================================
+
+- name: Validate network config references are file-safe
+  ansible.builtin.assert:
+    that:
+      - matched_datacenter_config.network_configs is defined
+      - matched_datacenter_config.network_configs | length > 0
+      - matched_datacenter_config.network_configs | difference(matched_datacenter_config.network_configs | map('regex_replace', '[^A-Za-z0-9_]', '') | list) | length == 0
+    fail_msg: >-
+      Datacenter config {{ datacenter_config_file }} must define network_configs
+      using only file-safe identifiers.
+
+- name: Load referenced network config files
+  ansible.builtin.include_vars:
+    file: "{{ config_root_path }}/networks/{{ item }}.yml"
+    name: loaded_network_config
+  register: loaded_network_config_results
+  loop: "{{ matched_datacenter_config.network_configs }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Merge loaded network configs into networks
+  ansible.builtin.set_fact:
+    networks: >-
+      {{
+        loaded_network_config_results.results
+        | map(attribute='ansible_facts.loaded_network_config.networks')
+        | flatten
+      }}
+
+# ==============================================================================
+# Resolved config payload
+# ==============================================================================
+
+- name: Build resolved config payload
+  ansible.builtin.set_fact:
+    resolved_config:
+      request:
+        profile: "{{ fts_config_profile }}"
+        location: "{{ fts_location }}"
+        environment: "{{ fts_environment }}"
+        compartment: "{{ fts_compartment }}"
+        os_type: "{{ fts_os_type }}"
+        cpu: "{{ fts_cpu | int }}"
+        memory_gb: "{{ fts_mem | int }}"
+        purpose: "{{ fts_purpose | default('not provided') }}"
+        user_email: "{{ fts_useremail | default('not provided') }}"
+      profile:
+        file: "config/profiles/{{ fts_config_profile }}.yml"
+        template_folder: "{{ profile_config.template_folder }}"
+        os_template_count: "{{ profile_config.os_templates | length }}"
+      template:
+        key: "{{ resolved_template_config.template_key }}"
+        folder: "{{ resolved_template_config.template_folder }}"
+        name: "{{ resolved_template_config.template_name }}"
+        guest_os_family: "{{ resolved_template_config.guest_os_family }}"
+      datacenter: >-
+        {{
+          matched_datacenter_config
+          | combine({
+              'file': 'config/datacenter/' ~ datacenter_config_file ~ '.yml',
+              'name': matched_datacenter_config.datacenter_config_name
+            }, recursive=True)
+        }}
+      networks:
+        count: "{{ networks | length }}"
+        entries: "{{ networks }}"
+
+- name: Show resolved config payload
+  ansible.builtin.debug:
+    var: resolved_config

@@ -1,0 +1,26 @@
+---
+# Config profile: homelab
+# fts_config_profile=homelab selects this profile at job launch.
+
+# No external integrations in the homelab environment.
+integrations: {}
+
+# OS template catalog. Keys are fts_os_type values; template_name is the
+# backing vCenter template in template_folder.
+template_folder: Templates
+os_templates:
+  rhel9:
+    template_name: rhel9-template
+    guest_os_family: linux
+  ubuntu22:
+    template_name: ubuntu22-template
+    guest_os_family: linux
+  windows2022:
+    template_name: win2022-template
+    guest_os_family: windows
+
+# Placement eligibility thresholds
+cluster_cpu_cutoff: 3.0
+cluster_mem_cutoff: 0.0
+disk_cutoff: 30.0
+disk_vm_cutoff_tb: 5.0

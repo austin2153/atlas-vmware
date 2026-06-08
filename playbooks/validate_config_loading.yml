@@ -1,0 +1,18 @@
+---
+# Validates request-driven config loading without touching VMware APIs.
+# Proves that request inputs resolve to the expected Git-backed configuration.
+
+- name: Validate request config loading
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - vars/sample_vm_request.yml
+    - "{{ playbook_dir }}/../vars/credentials.yml"
+
+  tasks:
+    - name: Show runtime context
+      ansible.builtin.import_tasks: tasks/show_runtime_context.yml
+
+    - name: Load request-driven config
+      ansible.builtin.import_tasks: tasks/load_request_config.yml
