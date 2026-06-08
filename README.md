@@ -42,31 +42,51 @@ ansible-playbook playbooks/<playbook>.yml --vault-password-file ~/.vault_passwor
 
 | Playbook | What it does |
 |---|---|
+| `provision_vm.yml` | Full end-to-end VM provisioning — config load, placement, VM clone |
 | `validate_config_loading.yml` | Validates request vars resolve to the correct datacenter/profile/network config |
-| `validate_vm_placement.yml` | Full placement pipeline: vCenter → cluster → datastore → network → template |
+| `validate_vm_placement.yml` | Runs the placement pipeline without provisioning — useful for dry runs |
 | `setup_vcsim.yml` | Seeds vcsim test fixtures (run once after redeploy) |
 | `get_info.yml` | Queries datacenter info from all 4 vcsim instances |
 
-## VM placement pipeline
+## VM provisioning pipeline
 
-`validate_vm_placement.yml` exercises the full placement decision chain:
+`provision_vm.yml` runs the full pipeline from request inputs to a provisioned VM:
 
-1. **select_vcenter** — discovers vSphere datacenters via SOAP API, validates at least one is reachable
-2. **select_cluster** — picks the cluster with lowest CPU utilization, filtered by profile thresholds
-3. **select_datastore** — picks the datastore with most free space, filtered by `disk_cutoff` GB threshold
-4. **select_network** — matches a network from `resolved_config` by compartment tag and `provisioning.state:enabled`
-5. **select_template** — finds the requested OS template by name in the configured Templates folder
+1. **load_request_config** — resolves `fts_*` request vars to datacenter, profile, and network config from Git
+2. **select_vcenter** — discovers vSphere datacenters via SOAP API, validates at least one is reachable
+3. **select_cluster** — picks the cluster with lowest CPU utilization, filtered by profile thresholds
+4. **select_datastore** — picks the datastore with most free space, filtered by `disk_cutoff` GB threshold
+5. **select_network** — matches a network from resolved config by compartment tag and `provisioning.state:enabled`
+6. **select_template** — finds the requested OS template by name in the configured Templates folder
+7. **check_vm_exists** — checks if a VM with the target name already exists; skips provisioning if so
+8. **create VM** — clones the template onto the selected cluster/datastore via `CloneVM_Task`
 
-Each step produces a `selected_*` fact consumed by the next step.
+Each placement step produces a `selected_*` fact consumed by subsequent steps.
+
+### Request inputs
+
+| Variable | Description | Example |
+|---|---|---|
+| `fts_config_profile` | Provisioning profile name | `homelab` |
+| `fts_location` | Location tag | `location:atlas.vcenter-01` |
+| `fts_environment` | Environment tag | `environment:atlas.dev` |
+| `fts_compartment` | Compartment tag | `compartment:atlas.general` |
+| `fts_os_type` | OS type key from profile | `rhel9` |
+| `fts_cpu` | vCPU count | `2` |
+| `fts_mem` | Memory in GB | `4` |
+
+For local testing these come from `playbooks/vars/sample_vm_request.yml`. In AWX they are passed as extra vars via a job template survey.
 
 ### vcsim compatibility
 
-vcsim implements the vSphere SOAP API but not all features. A few `community.vmware` modules crash against vcsim due to missing attributes (DRS config, VM summary fields). Where this happens, placement tasks use small pyVmomi scripts in `scripts/` instead:
+vcsim implements the vSphere SOAP API but not all features. A few `community.vmware` modules crash against vcsim due to missing attributes (DRS config, VM summary fields). Where this happens, tasks use small pyVmomi scripts in `scripts/` instead:
 
 | Script | Used by | Why |
 |---|---|---|
 | `vcenter_cluster_facts.py` | `select_cluster` | `vmware_cluster_info` crashes on missing DRS config |
 | `vcenter_template_facts.py` | `select_template` | `vmware_vm_info` crashes on missing summary attribute |
+| `vcenter_vm_exists.py` | `check_vm_exists` | direct pyVmomi lookup by name |
+| `vcenter_create_vm.py` | `provision_vm.yml` | `vmware_guest` silently no-ops for VM creation on vcsim |
 | `vcsim_create_templates.py` | `setup_vcsim.yml` | `vmware_guest` silently no-ops for template creation |
 
 pyVmomi is VMware's official Python SDK for the vSphere SOAP API — the same underlying library that `community.vmware` modules use internally.

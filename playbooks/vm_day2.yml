@@ -1,0 +1,122 @@
+---
+# Day 2 operations for an existing VM.
+#
+# Usage (local):
+#   ansible-playbook playbooks/vm_day2.yml \
+#     --vault-password-file ~/.vault_password \
+#     -e "vm_name=atlas01-rhel9-20260607221934 vm_action=power_on vcenter_hostname=vcenter-01.atlas.local datacenter=DC0"
+#
+# Supported actions:
+#   power_on      - Power on the VM
+#   power_off     - Power off the VM
+#   reset         - Reset (hard reboot) the VM
+#   snapshot      - Create a snapshot (optional: snapshot_name)
+#   snapshots     - List all snapshots
+#   delete_snapshots - Remove all snapshots
+#   delete        - Delete the VM (powers off first if running)
+#
+# In AWX, these are passed via a survey at job launch time.
+
+- name: VM Day 2 Operations
+  hosts: localhost
+  gather_facts: false
+
+  vars_files:
+    - "{{ playbook_dir }}/../vars/credentials.yml"
+
+  vars:
+    vcenter_credential: vcsim
+
+  tasks:
+    - name: Show runtime context
+      ansible.builtin.import_tasks: tasks/show_runtime_context.yml
+
+    - name: Validate required inputs
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined and vm_name | length > 0
+          - vm_action is defined and vm_action | length > 0
+          - vcenter_hostname is defined and vcenter_hostname | length > 0
+          - datacenter is defined and datacenter | length > 0
+          - vm_action in ['power_on', 'power_off', 'reset', 'snapshot', 'snapshots', 'delete_snapshots', 'delete']
+        fail_msg: >-
+          Required: vm_name, vm_action, vcenter_hostname, datacenter.
+          vm_action must be one of: power_on, power_off, reset, snapshot, snapshots, delete_snapshots, delete
+
+    - name: Resolve vCenter credential
+      ansible.builtin.set_fact:
+        _vcenter_cred: "{{ vault_credentials.vcenter[vcenter_credential] }}"
+      no_log: true
+
+    # Power operations
+    - name: Run power action
+      ansible.builtin.script:
+        executable: "{{ ansible_playbook_python }}"
+        cmd: >-
+          {{ playbook_dir }}/../scripts/vcenter_vm_power.py
+          {{ vcenter_hostname }}
+          {{ _vcenter_cred.username }}
+          {{ _vcenter_cred.password }}
+          {{ vm_name }}
+          {{ datacenter }}
+          {{ _power_action_map[vm_action] }}
+      vars:
+        _power_action_map:
+          power_on: "on"
+          power_off: "off"
+          reset: "reset"
+      register: _power_result_raw
+      no_log: true
+      when: vm_action in ['power_on', 'power_off', 'reset']
+
+    - name: Show power operation result
+      ansible.builtin.debug:
+        msg: "{{ (_power_result_raw.stdout | from_json).result }}"
+      when: vm_action in ['power_on', 'power_off', 'reset']
+
+    # Snapshot operations
+    - name: Run snapshot action
+      ansible.builtin.script:
+        executable: "{{ ansible_playbook_python }}"
+        cmd: >-
+          {{ playbook_dir }}/../scripts/vcenter_vm_snapshot.py
+          {{ vcenter_hostname }}
+          {{ _vcenter_cred.username }}
+          {{ _vcenter_cred.password }}
+          {{ vm_name }}
+          {{ datacenter }}
+          {{ _snapshot_action_map[vm_action] }}
+          {{ snapshot_name | default('') }}
+      vars:
+        _snapshot_action_map:
+          snapshot: "create"
+          snapshots: "list"
+          delete_snapshots: "delete_all"
+      register: _snapshot_result_raw
+      no_log: true
+      when: vm_action in ['snapshot', 'snapshots', 'delete_snapshots']
+
+    - name: Show snapshot result
+      ansible.builtin.debug:
+        msg: "{{ _snapshot_result_raw.stdout | from_json }}"
+      when: vm_action in ['snapshot', 'snapshots', 'delete_snapshots']
+
+    # Delete VM
+    - name: Delete VM
+      ansible.builtin.script:
+        executable: "{{ ansible_playbook_python }}"
+        cmd: >-
+          {{ playbook_dir }}/../scripts/vcenter_vm_delete.py
+          {{ vcenter_hostname }}
+          {{ _vcenter_cred.username }}
+          {{ _vcenter_cred.password }}
+          {{ vm_name }}
+          {{ datacenter }}
+      register: _delete_result_raw
+      no_log: true
+      when: vm_action == 'delete'
+
+    - name: Show delete result
+      ansible.builtin.debug:
+        msg: "{{ (_delete_result_raw.stdout | from_json).result }}"
+      when: vm_action == 'delete'

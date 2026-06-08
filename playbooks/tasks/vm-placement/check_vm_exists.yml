@@ -1,0 +1,42 @@
+---
+# Checks if a VM with the target name already exists in vCenter.
+#
+# Expects:
+# - vm_name
+# - selected_cluster (from select_cluster)
+# - vault_credentials / resolved_config (for auth)
+#
+# Produces:
+# - vm_already_exists: bool
+
+- name: Check if VM already exists in vCenter
+  ansible.builtin.script:
+    executable: "{{ ansible_playbook_python }}"
+    cmd: >-
+      {{ playbook_dir }}/../scripts/vcenter_vm_exists.py
+      {{ selected_cluster.hostname }}
+      {{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].username }}
+      {{ vault_credentials.vcenter[resolved_config.datacenter.vcenter_credential].password }}
+      {{ vm_name }}
+      {{ selected_cluster.datacenter }}
+  register: _vm_exists_raw
+  no_log: true
+
+- name: Parse VM exists check result
+  ansible.builtin.set_fact:
+    _vm_exists_result: "{{ _vm_exists_raw.stdout | from_json }}"
+
+- name: Validate VM exists check succeeded
+  ansible.builtin.assert:
+    that:
+      - _vm_exists_result.error == ''
+    fail_msg: "VM exists check failed: {{ _vm_exists_result.error }}"
+
+- name: Set vm_already_exists fact
+  ansible.builtin.set_fact:
+    vm_already_exists: "{{ _vm_exists_result.exists }}"
+
+- name: WARNING - VM already exists
+  ansible.builtin.debug:
+    msg: "WARNING: VM '{{ vm_name }}' already exists (MOID: {{ _vm_exists_result.vm.moid }}). Skipping provisioning."
+  when: vm_already_exists

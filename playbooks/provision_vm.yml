@@ -2,11 +2,11 @@
 # Provisions a VM from a request against vcsim.
 # Runs the full placement pipeline then clones the selected template.
 #
-# Usage:
+# Usage (local):
 #   ansible-playbook playbooks/provision_vm.yml --vault-password-file ~/.vault_password
 #
 # Request inputs come from vars/sample_vm_request.yml for local testing.
-# In AWX, these are passed as extra vars at job launch time.
+# In AWX, these are passed as extra vars at job launch time via a survey.
 
 - name: Provision VM
   hosts: localhost
@@ -55,6 +55,9 @@
           - "CPU          : {{ fts_cpu }}"
           - "Memory       : {{ fts_mem }}GB"
 
+    - name: Check if VM already exists
+      ansible.builtin.import_tasks: tasks/vm-placement/check_vm_exists.yml
+
     - name: Create VM from template via pyVmomi
       ansible.builtin.script:
         executable: "{{ ansible_playbook_python }}"
@@ -76,16 +79,19 @@
           memory_mb: "{{ (fts_mem | int) * 1024 }}"
       register: _create_result_raw
       no_log: true
+      when: not vm_already_exists
 
     - name: Parse VM creation result
       ansible.builtin.set_fact:
         vm_result: "{{ _create_result_raw.stdout | from_json }}"
+      when: not vm_already_exists
 
     - name: Validate VM was created successfully
       ansible.builtin.assert:
         that:
           - vm_result.error == ''
         fail_msg: "VM creation failed: {{ vm_result.error }}"
+      when: not vm_already_exists
 
     - name: Show provisioned VM
       ansible.builtin.debug:
@@ -97,3 +103,4 @@
           - "Memory   : {{ vm_result.vm.memory_mb }}MB"
           - "Cluster  : {{ vm_result.vm.cluster }}"
           - "Datastore: {{ vm_result.vm.datastore }}"
+      when: not vm_already_exists
