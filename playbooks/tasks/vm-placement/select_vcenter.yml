@@ -32,6 +32,26 @@
       must exist under vault_credentials.vcenter with username and password.
   no_log: true
 
+- name: Test vCenter HTTPS reachability
+  ansible.builtin.uri:
+    url: "https://{{ item.hostname }}/sdk"
+    validate_certs: false
+    status_code: [200, 401, 403, 500, 503]
+    method: GET
+    timeout: 5
+  loop: "{{ resolved_config.datacenter.vcenters }}"
+  loop_control:
+    label: "{{ item.hostname }}"
+  register: _vcenter_reach_test
+  failed_when: false
+
+- name: Show vCenter reachability results
+  ansible.builtin.debug:
+    msg: "{{ item.item.hostname }}: status={{ item.status | default('UNREACHABLE') }}"
+  loop: "{{ _vcenter_reach_test.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.hostname }}"
+
 - name: Discover vSphere datacenters across configured vCenters
   community.vmware.vmware_datacenter_info:
     hostname: "{{ item.hostname }}"
